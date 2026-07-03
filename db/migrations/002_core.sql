@@ -55,3 +55,39 @@ CREATE TABLE app.rooms (
     UNIQUE (venue_id, name)
 );
 COMMENT ON TABLE app.rooms IS 'Bookable spaces inside a venue (halls, stages, workshop rooms)';
+
+CREATE TABLE app.event_categories (
+    category_id  integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name         text    NOT NULL UNIQUE,
+    parent_id    integer REFERENCES app.event_categories,
+    CHECK (parent_id IS DISTINCT FROM category_id)
+);
+COMMENT ON TABLE app.event_categories IS 'Category tree, e.g. Technology > Data > Databases (queried recursively)';
+
+CREATE TABLE app.events (
+    event_id      bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    org_id        bigint           NOT NULL REFERENCES app.organizations,
+    venue_id      bigint           NOT NULL REFERENCES app.venues,
+    category_id   integer          NOT NULL REFERENCES app.event_categories,
+    title         text             NOT NULL,
+    slug          text             NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'),
+    description   text             NOT NULL DEFAULT '',
+    status        app.event_status NOT NULL DEFAULT 'draft',
+    starts_at     timestamptz      NOT NULL,
+    ends_at       timestamptz      NOT NULL,
+    capacity      integer          NOT NULL CHECK (capacity > 0),
+    published_at  timestamptz,
+    created_at    timestamptz      NOT NULL DEFAULT now(),
+    updated_at    timestamptz      NOT NULL DEFAULT now(),
+    search        tsvector GENERATED ALWAYS AS (
+                      setweight(to_tsvector('english', title), 'A') ||
+                      setweight(to_tsvector('english', description), 'B')) STORED,
+    CHECK (ends_at > starts_at),
+    CHECK (ends_at - starts_at <= interval '14 days'),
+    CHECK (status = 'draft' OR published_at IS NOT NULL)
+);
+COMMENT ON TABLE  app.events IS 'An event hosted by one organization at one venue';
+COMMENT ON COLUMN app.events.capacity IS 'Maximum attendees; may not exceed the venue capacity (trigger)';
+COMMENT ON COLUMN app.events.search IS 'Full-text search document: title weighted above description';
+CREATE TRIGGER events_updated_at BEFORE UPDATE ON app.events
+    FOR EACH ROW EXECUTE FUNCTION app.set_updated_at();
