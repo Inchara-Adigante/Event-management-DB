@@ -91,3 +91,36 @@ COMMENT ON COLUMN app.events.capacity IS 'Maximum attendees; may not exceed the 
 COMMENT ON COLUMN app.events.search IS 'Full-text search document: title weighted above description';
 CREATE TRIGGER events_updated_at BEFORE UPDATE ON app.events
     FOR EACH ROW EXECUTE FUNCTION app.set_updated_at();
+
+CREATE TABLE app.speakers (
+    speaker_id  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    full_name   text   NOT NULL,
+    email       citext UNIQUE,
+    company     text,
+    bio         text   NOT NULL DEFAULT ''
+);
+COMMENT ON TABLE app.speakers IS 'People who present sessions; a speaker does not need a user account';
+
+CREATE TABLE app.sessions (
+    session_id  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_id    bigint      NOT NULL REFERENCES app.events ON DELETE CASCADE,
+    room_id     bigint      NOT NULL REFERENCES app.rooms,
+    title       text        NOT NULL,
+    track       text,
+    starts_at   timestamptz NOT NULL,
+    ends_at     timestamptz NOT NULL,
+    during      tstzrange GENERATED ALWAYS AS (tstzrange(starts_at, ends_at, '[)')) STORED,
+    CHECK (ends_at > starts_at),
+    -- A room can never be double-booked, across all events.
+    CONSTRAINT sessions_no_room_overlap EXCLUDE USING gist (room_id WITH =, during WITH &&)
+);
+COMMENT ON TABLE  app.sessions IS 'Agenda items of an event, each in one room';
+COMMENT ON COLUMN app.sessions.during IS 'Half-open time range [start, end) used by the no-overlap constraint';
+
+CREATE TABLE app.session_speakers (
+    session_id  bigint NOT NULL REFERENCES app.sessions ON DELETE CASCADE,
+    speaker_id  bigint NOT NULL REFERENCES app.speakers,
+    role        text   NOT NULL DEFAULT 'speaker' CHECK (role IN ('speaker', 'moderator', 'panelist')),
+    PRIMARY KEY (session_id, speaker_id)
+);
+COMMENT ON TABLE app.session_speakers IS 'Many-to-many: who presents which session';
