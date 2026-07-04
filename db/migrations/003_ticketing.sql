@@ -67,3 +67,39 @@ CREATE TABLE app.order_items (
     UNIQUE (order_id, ticket_type_id)
 );
 COMMENT ON TABLE  app.order_items IS 'Lines of an order; unit_price is frozen at purchase time';
+
+CREATE TABLE app.payments (
+    payment_id    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    order_id      bigint             NOT NULL REFERENCES app.orders,
+    amount        numeric(10,2)      NOT NULL CHECK (amount >= 0),
+    method        app.payment_method NOT NULL,
+    status        app.payment_status NOT NULL,
+    provider_ref  text               NOT NULL UNIQUE,
+    created_at    timestamptz        NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE  app.payments IS 'Payment attempts reported by the payment provider';
+COMMENT ON COLUMN app.payments.provider_ref IS 'Provider transaction id; unique so a webhook replay cannot record a payment twice';
+
+CREATE TABLE app.refunds (
+    refund_id     bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    order_id      bigint        NOT NULL REFERENCES app.orders,
+    payment_id    bigint        NOT NULL REFERENCES app.payments,
+    amount        numeric(10,2) NOT NULL CHECK (amount > 0),
+    reason        text          NOT NULL,
+    processed_by  bigint        REFERENCES app.users,
+    created_at    timestamptz   NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE app.refunds IS 'Money returned; total refunds of a payment can never exceed the amount captured (trigger)';
+
+CREATE TABLE app.tickets (
+    ticket_id       bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    order_item_id   bigint            NOT NULL REFERENCES app.order_items ON DELETE CASCADE,
+    event_id        bigint            NOT NULL REFERENCES app.events,
+    code            uuid              NOT NULL UNIQUE DEFAULT gen_random_uuid(),
+    attendee_name   text              NOT NULL,
+    attendee_email  citext            NOT NULL,
+    status          app.ticket_status NOT NULL DEFAULT 'valid',
+    issued_at       timestamptz       NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE  app.tickets IS 'One admission per person; the QR code on the ticket is the uuid in code';
+COMMENT ON COLUMN app.tickets.event_id IS 'Denormalized from the order for fast door scanning and per-event constraints';
