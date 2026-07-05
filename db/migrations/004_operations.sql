@@ -35,3 +35,14 @@ COMMENT ON TABLE app.waitlist IS 'Queue for sold-out ticket types; first come, f
 -- A person can only be in the active queue once per ticket type.
 CREATE UNIQUE INDEX waitlist_one_active_entry ON app.waitlist (ticket_type_id, user_id)
     WHERE status IN ('waiting', 'offered');
+
+CREATE TABLE app.feedback (
+    feedback_id  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_id     bigint      NOT NULL REFERENCES app.events,
+    user_id      bigint      NOT NULL REFERENCES app.users,
+    rating       smallint    NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    comment      text,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (event_id, user_id)
+);
+COMMENT ON TABLE app.feedback IS 'Post-event ratings; only people who actually checked in may rate (trigger)';
