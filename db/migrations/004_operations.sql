@@ -19,3 +19,19 @@ CREATE TABLE app.scan_attempts (
     attempted_at  timestamptz NOT NULL DEFAULT now()
 );
 COMMENT ON TABLE app.scan_attempts IS 'Every scan at the door, including rejected ones (fraud and queue analysis)';
+
+CREATE TABLE app.waitlist (
+    waitlist_id       bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    ticket_type_id    bigint              NOT NULL REFERENCES app.ticket_types ON DELETE CASCADE,
+    user_id           bigint              NOT NULL REFERENCES app.users,
+    quantity          smallint            NOT NULL DEFAULT 1 CHECK (quantity BETWEEN 1 AND 10),
+    status            app.waitlist_status NOT NULL DEFAULT 'waiting',
+    joined_at         timestamptz         NOT NULL DEFAULT now(),
+    offered_at        timestamptz,
+    offer_expires_at  timestamptz,
+    CHECK (status <> 'offered' OR (offered_at IS NOT NULL AND offer_expires_at > offered_at))
+);
+COMMENT ON TABLE app.waitlist IS 'Queue for sold-out ticket types; first come, first offered when tickets free up';
+-- A person can only be in the active queue once per ticket type.
+CREATE UNIQUE INDEX waitlist_one_active_entry ON app.waitlist (ticket_type_id, user_id)
+    WHERE status IN ('waiting', 'offered');
