@@ -67,3 +67,67 @@ BEGIN
 END $$;
 CREATE TRIGGER ticket_types_check BEFORE INSERT OR UPDATE OF quantity_total, sales_end, event_id ON app.ticket_types
     FOR EACH ROW EXECUTE FUNCTION app.check_ticket_type();
+
+-- Tickets and check-ins must point at the same event as their order.
+CREATE FUNCTION app.check_ticket_event() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    expected bigint;
+BEGIN
+    IF TG_TABLE_NAME = 'tickets' THEN
+        SELECT o.event_id INTO expected
+          FROM app.order_items oi JOIN app.orders o USING (order_id)
+         WHERE oi.order_item_id = NEW.order_item_id;
+    ELSE
+        SELECT event_id INTO expected FROM app.tickets WHERE ticket_id = NEW.ticket_id;
+    END IF;
+    IF NEW.event_id IS DISTINCT FROM expected THEN
+        RAISE EXCEPTION '%: event_id % does not match the order''s event %', TG_TABLE_NAME, NEW.event_id, expected
+            USING ERRCODE = 'foreign_key_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER tickets_event_check BEFORE INSERT OR UPDATE OF event_id, order_item_id ON app.tickets
+    FOR EACH ROW EXECUTE FUNCTION app.check_ticket_event();
+CREATE TRIGGER check_ins_event_check BEFORE INSERT ON app.check_ins
+    FOR EACH ROW EXECUTE FUNCTION app.check_ticket_event();
+
+-- Refunds can never add up to more than was captured.
+CREATE FUNCTION app.check_refund() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    captured numeric;
+    refunded numeric;
+BEGIN
+    SELECT amount INTO captured FROM app.payments
+     WHERE payment_id = NEW.payment_id AND order_id = NEW.order_id AND status IN ('captured', 'refunded')
+       FOR UPDATE;                                   -- serializes concurrent refunds of one payment
+    IF captured IS NULL THEN
+        RAISE EXCEPTION 'payment % is not a captured payment of order %', NEW.payment_id, NEW.order_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+    SELECT coalesce(sum(amount), 0) INTO refunded FROM app.refunds WHERE payment_id = NEW.payment_id;
+    IF refunded + NEW.amount > captured THEN
+        RAISE EXCEPTION 'refunds would total %, more than the % captured', refunded + NEW.amount, captured
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER refunds_check BEFORE INSERT ON app.refunds
+    FOR EACH ROW EXECUTE FUNCTION app.check_refund();
+
+-- Only people who were actually there can rate an event.
+CREATE FUNCTION app.check_feedback() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM app.orders o
+          JOIN app.order_items oi USING (order_id)
+          JOIN app.tickets t USING (order_item_id)
+         WHERE o.user_id = NEW.user_id AND o.event_id = NEW.event_id AND t.status = 'checked_in'
+    ) THEN
+        RAISE EXCEPTION 'user % did not attend event %', NEW.user_id, NEW.event_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER feedback_check BEFORE INSERT ON app.feedback
+    FOR EACH ROW EXECUTE FUNCTION app.check_feedback();
