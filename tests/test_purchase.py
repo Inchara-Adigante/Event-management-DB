@@ -1,0 +1,87 @@
+"""Checkout rules, atomicity and behaviour under concurrent buyers."""
+import threading
+from datetime import timedelta
+
+import psycopg
+import pytest
+
+from conftest import NOW, one
+
+
+def sqlstate(exc_info):
+    return exc_info.value.sqlstate
+
+
+def test_purchase_issues_tickets_payment_and_updates_inventory(con, f):
+    ev = f.event()
+    tt = f.ticket_type(ev, qty=10, price=40)
+    buyer = f.user("Grace Hopper")
+    order = f.buy(buyer, tt, qty=3)
+    assert con.execute("SELECT status, subtotal, total FROM app.orders WHERE order_id = %s", (order,)).fetchone() == ("paid", 120, 120)
+    assert one(con, "SELECT count(*) FROM app.tickets WHERE event_id = %s AND attendee_name = 'Grace Hopper'", (ev["id"],)) == 3
+    assert one(con, "SELECT quantity_sold FROM app.ticket_types WHERE ticket_type_id = %s", (tt,)) == 3
+    assert con.execute("SELECT amount, status FROM app.payments WHERE order_id = %s", (order,)).fetchone() == (120, "captured")
+    assert one(con, "SELECT count(DISTINCT code) FROM app.tickets") == 3
+
+
+def test_sold_out(con, f):
+    tt = f.ticket_type(f.event(), qty=2)
+    f.buy(f.user(), tt, qty=2)
+    with pytest.raises(psycopg.Error, match="sold out") as e:
+        f.buy(f.user(), tt)
+    assert sqlstate(e) == "EV001"
+
+
+def test_sales_window_is_enforced(con, f):
+    ev = f.event()
+    tt = f.ticket_type(ev, sales_start=NOW() + timedelta(days=1))
+    with pytest.raises(psycopg.Error, match="not on sale") as e:
+        f.buy(f.user(), tt)
+    assert sqlstate(e) == "EV002"
+
+
+def test_per_order_limit(con, f):
+    tt = f.ticket_type(f.event(), max_per_order=4)
+    with pytest.raises(psycopg.Error, match="at most 4") as e:
+        f.buy(f.user(), tt, qty=5)
+    assert sqlstate(e) == "EV004"
+
+
+def test_draft_and_past_events_cannot_be_booked(con, f):
+    draft = f.event(status="draft")
+    with pytest.raises(psycopg.Error, match="not open for booking") as e:
+        f.buy(f.user(), f.ticket_type(draft))
+    assert sqlstate(e) == "EV005"
+
+
+def test_one_order_one_event(con, f):
+    a, b = f.ticket_type(f.event()), f.ticket_type(f.event())
+    with pytest.raises(psycopg.Error, match="one event") as e:
+        con.execute("SELECT app.purchase_tickets(%s, %s::jsonb)",
+                    (f.user(), f'[{{"ticket_type_id": {a}, "quantity": 1}}, {{"ticket_type_id": {b}, "quantity": 1}}]'))
+    assert sqlstate(e) == "EV007"
+
+
+def test_a_failed_order_leaves_no_trace(con, f):
+    ev = f.event()
+    plenty, scarce = f.ticket_type(ev, qty=50), f.ticket_type(ev, qty=1)
+    with pytest.raises(psycopg.Error, match="sold out"):
+        con.execute("SELECT app.purchase_tickets(%s, %s::jsonb)",
+                    (f.user(), f'[{{"ticket_type_id": {plenty}, "quantity": 3}}, {{"ticket_type_id": {scarce}, "quantity": 2}}]'))
+    assert one(con, "SELECT count(*) FROM app.orders") == 0
+    assert one(con, "SELECT count(*) FROM app.tickets") == 0
+    assert one(con, "SELECT sum(quantity_sold) FROM app.ticket_types") == 0
+
+
+def test_promo_codes_percent_amount_and_usage_limit(con, f):
+    ev = f.event()
+    tt = f.ticket_type(ev, price=80)
+    f.promo(ev, "TEAM25", "percent", 25, max_uses=1)
+    f.promo(ev, "TENOFF", "amount", 10)
+    o1 = f.buy(f.user(), tt, qty=2, promo="team25")              # codes are case-insensitive
+    assert con.execute("SELECT subtotal, discount, total FROM app.orders WHERE order_id = %s", (o1,)).fetchone() == (160, 40, 120)
+    with pytest.raises(psycopg.Error, match="not valid") as e:
+        f.buy(f.user(), tt, promo="TEAM25")
+    assert sqlstate(e) == "EV003"
+    o2 = f.buy(f.user(), tt, promo="TENOFF")
+    assert one(con, "SELECT total FROM app.orders WHERE order_id = %s", (o2,)) == 70
