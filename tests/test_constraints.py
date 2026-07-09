@@ -80,3 +80,37 @@ def test_ticket_tiers_must_fit_the_event_capacity(con, f):
     f.ticket_type(ev, qty=40)
     with pytest.raises(errors.CheckViolation, match="would total 101 seats"):
         f.ticket_type(ev, qty=1)
+
+
+def test_inventory_can_never_be_oversold_even_by_direct_updates(con, f):
+    tt = f.ticket_type(f.event(), qty=5)
+    with pytest.raises(errors.CheckViolation, match="ticket_types_inventory"):
+        con.execute("UPDATE app.ticket_types SET quantity_sold = 6 WHERE ticket_type_id = %s", (tt,))
+
+
+def test_order_totals_must_add_up(con, f):
+    ev = f.event()
+    with pytest.raises(errors.CheckViolation):
+        con.execute("""INSERT INTO app.orders (user_id, event_id, status, subtotal, discount, total, paid_at)
+                       VALUES (%s, %s, 'paid', 100, 10, 95, now())""", (f.user(), ev["id"]))
+
+
+def test_paid_orders_must_have_a_payment_time(con, f):
+    ev = f.event()
+    with pytest.raises(errors.CheckViolation):
+        con.execute("""INSERT INTO app.orders (user_id, event_id, status, subtotal, discount, total)
+                       VALUES (%s, %s, 'paid', 100, 0, 100)""", (f.user(), ev["id"]))
+
+
+def test_ticket_must_belong_to_the_event_of_its_order(con, f):
+    ev, other = f.event(), f.event()
+    order = f.buy(f.user(), f.ticket_type(ev))
+    item = one(con, "SELECT order_item_id FROM app.order_items WHERE order_id = %s", (order,))
+    with pytest.raises(psycopg.errors.ForeignKeyViolation, match="does not match"):
+        con.execute("""INSERT INTO app.tickets (order_item_id, event_id, attendee_name, attendee_email)
+                       VALUES (%s, %s, 'Sneaky', 'x@example.com')""", (item, other["id"]))
+
+
+def test_full_text_search_column_is_maintained(con, f):
+    f.event()
+    assert one(con, "SELECT count(*) FROM app.events WHERE search @@ websearch_to_tsquery('english', 'database')") == 1
