@@ -101,7 +101,7 @@ BEGIN
 
     IF p_promo_code IS NOT NULL THEN
         SELECT * INTO v_promo FROM app.promo_codes
-         WHERE event_id = v_event.event_id AND code = p_promo_code
+         WHERE event_id = v_event.event_id AND code = p_promo_code::citext   -- text = citext would compare case-sensitively
            FOR UPDATE;                                 -- serializes the last use of a limited code
         IF NOT FOUND OR now() NOT BETWEEN v_promo.valid_from AND v_promo.valid_until
            OR (v_promo.max_uses IS NOT NULL AND v_promo.times_used >= v_promo.max_uses) THEN
