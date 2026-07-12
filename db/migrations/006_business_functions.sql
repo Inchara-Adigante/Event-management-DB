@@ -138,3 +138,77 @@ BEGIN
     RETURN v_order_id;
 END $$;
 COMMENT ON FUNCTION app.purchase_tickets IS 'Checkout: validates sales window, limits, inventory and promo code, then issues tickets atomically';
+
+-- ---------------------------------------------------------------------------
+-- offer_waitlist: when seats free up, offer them to the queue in arrival order (24 h to buy).
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION app.offer_waitlist(p_ticket_type_id bigint, p_offer_hours integer DEFAULT 24)
+RETURNS integer LANGUAGE plpgsql AS $$
+DECLARE
+    v_free   integer;
+    v_offers integer := 0;
+    w        record;
+BEGIN
+    SELECT quantity_total - quantity_sold - app.tickets_held(ticket_type_id) INTO v_free
+      FROM app.ticket_types WHERE ticket_type_id = p_ticket_type_id FOR UPDATE;
+
+    FOR w IN
+        SELECT waitlist_id, quantity FROM app.waitlist
+         WHERE ticket_type_id = p_ticket_type_id AND status = 'waiting'
+         ORDER BY joined_at, waitlist_id
+           FOR UPDATE SKIP LOCKED
+    LOOP
+        EXIT WHEN v_free <= 0;
+        CONTINUE WHEN w.quantity > v_free;               -- a smaller request further back may still fit
+        UPDATE app.waitlist
+           SET status = 'offered', offered_at = now(), offer_expires_at = now() + make_interval(hours => p_offer_hours)
+         WHERE waitlist_id = w.waitlist_id;
+        v_free   := v_free - w.quantity;
+        v_offers := v_offers + 1;
+    END LOOP;
+    RETURN v_offers;
+END $$;
+COMMENT ON FUNCTION app.offer_waitlist IS 'Offers freed seats to waiting people in arrival order; returns the number of offers made';
+
+CREATE FUNCTION app.join_waitlist(p_user_id bigint, p_ticket_type_id bigint, p_quantity integer DEFAULT 1)
+RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE
+    v_free integer;
+    v_id   bigint;
+BEGIN
+    SELECT quantity_total - quantity_sold - app.tickets_held(ticket_type_id) INTO v_free
+      FROM app.ticket_types WHERE ticket_type_id = p_ticket_type_id;
+    IF v_free IS NULL THEN
+        RAISE EXCEPTION 'unknown ticket type %', p_ticket_type_id USING ERRCODE = 'EV007';
+    END IF;
+    IF v_free >= p_quantity THEN
+        RAISE EXCEPTION 'tickets are still available; buy them instead of joining the waitlist' USING ERRCODE = 'EV007';
+    END IF;
+    INSERT INTO app.waitlist (ticket_type_id, user_id, quantity)
+    VALUES (p_ticket_type_id, p_user_id, p_quantity)
+    RETURNING waitlist_id INTO v_id;
+    RETURN v_id;
+END $$;
+
+COMMENT ON FUNCTION app.join_waitlist IS 'Joins the queue for a sold-out ticket type; refused while seats are still available';
+
+-- Offers that ran out go back into circulation (run every few minutes by a scheduler).
+CREATE FUNCTION app.expire_waitlist_offers() RETURNS integer LANGUAGE plpgsql AS $$
+DECLARE
+    v_expired integer;
+    tt        bigint;
+BEGIN
+    WITH expired AS (
+        UPDATE app.waitlist SET status = 'expired'
+         WHERE status = 'offered' AND offer_expires_at <= now()
+        RETURNING ticket_type_id
+    )
+    SELECT count(*) INTO v_expired FROM expired;
+
+    FOR tt IN SELECT DISTINCT ticket_type_id FROM app.waitlist WHERE status = 'waiting' ORDER BY 1 LOOP
+        PERFORM app.offer_waitlist(tt);
+    END LOOP;
+    RETURN v_expired;
+END $$;
+
+COMMENT ON FUNCTION app.expire_waitlist_offers IS 'Expires unanswered offers and passes the seats to the next people waiting; returns offers expired';
