@@ -85,3 +85,62 @@ def test_promo_codes_percent_amount_and_usage_limit(con, f):
     assert sqlstate(e) == "EV003"
     o2 = f.buy(f.user(), tt, promo="TENOFF")
     assert one(con, "SELECT total FROM app.orders WHERE order_id = %s", (o2,)) == 70
+
+
+def _race(url, n, work):
+    """Run work(conn) in n threads that start at the same moment; return (successes, sqlstates of failures)."""
+    barrier, ok, failed, lock = threading.Barrier(n), [], [], threading.Lock()
+
+    def run():
+        with psycopg.connect(url, autocommit=True) as c:
+            barrier.wait()
+            try:
+                result = work(c)
+                with lock:
+                    ok.append(result)
+            except psycopg.Error as exc:
+                with lock:
+                    failed.append(exc.sqlstate)
+
+    threads = [threading.Thread(target=run) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return ok, failed
+
+
+def test_concurrent_buyers_never_oversell(con, f, db_url):
+    tt = f.ticket_type(f.event(), qty=25)
+    users = [f.user() for _ in range(40)]
+    it = iter(users)
+    lock = threading.Lock()
+
+    def buy(c):
+        with lock:
+            u = next(it)
+        return c.execute("SELECT app.purchase_tickets(%s, %s::jsonb)",
+                         (u, f'[{{"ticket_type_id": {tt}, "quantity": 1}}]')).fetchone()[0]
+
+    ok, failed = _race(db_url, 40, buy)
+    assert len(ok) == 25 and failed == ["EV001"] * 15
+    assert one(con, "SELECT quantity_sold FROM app.ticket_types WHERE ticket_type_id = %s", (tt,)) == 25
+    assert one(con, "SELECT count(*) FROM app.tickets") == 25
+
+
+def test_last_use_of_a_promo_code_goes_to_exactly_one_buyer(con, f, db_url):
+    ev = f.event()
+    tt = f.ticket_type(ev, qty=50, price=100)
+    f.promo(ev, "ONLYONE", "percent", 50, max_uses=1)
+    users = iter([f.user() for _ in range(10)])
+    lock = threading.Lock()
+
+    def buy(c):
+        with lock:
+            u = next(users)
+        return c.execute("SELECT app.purchase_tickets(%s, %s::jsonb, 'ONLYONE')",
+                         (u, f'[{{"ticket_type_id": {tt}, "quantity": 1}}]')).fetchone()[0]
+
+    ok, failed = _race(db_url, 10, buy)
+    assert len(ok) == 1 and failed == ["EV003"] * 9
+    assert one(con, "SELECT times_used FROM app.promo_codes") == 1
