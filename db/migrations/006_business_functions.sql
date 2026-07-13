@@ -212,3 +212,52 @@ BEGIN
 END $$;
 
 COMMENT ON FUNCTION app.expire_waitlist_offers IS 'Expires unanswered offers and passes the seats to the next people waiting; returns offers expired';
+
+-- ---------------------------------------------------------------------------
+-- refund_order: full refund before the event starts. Returns seats to inventory
+-- and immediately offers them to the waitlist.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION app.refund_order(p_order_id bigint, p_reason text, p_processed_by bigint DEFAULT NULL)
+RETURNS numeric LANGUAGE plpgsql AS $$
+DECLARE
+    v_order   app.orders%ROWTYPE;
+    v_payment app.payments%ROWTYPE;
+    v_starts  timestamptz;
+    li        record;
+BEGIN
+    SELECT * INTO v_order FROM app.orders WHERE order_id = p_order_id FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'order % not found', p_order_id USING ERRCODE = 'EV007';
+    END IF;
+    IF v_order.status <> 'paid' THEN
+        RAISE EXCEPTION 'order % is %, only paid orders can be refunded', p_order_id, v_order.status USING ERRCODE = 'EV006';
+    END IF;
+    SELECT starts_at INTO v_starts FROM app.events WHERE event_id = v_order.event_id;
+    IF v_starts <= now() THEN
+        RAISE EXCEPTION 'refunds close when the event starts' USING ERRCODE = 'EV006';
+    END IF;
+    IF EXISTS (SELECT 1 FROM app.tickets t JOIN app.order_items oi USING (order_item_id)
+                WHERE oi.order_id = p_order_id AND t.status = 'checked_in') THEN
+        RAISE EXCEPTION 'order % has tickets that were already used', p_order_id USING ERRCODE = 'EV006';
+    END IF;
+
+    SELECT * INTO v_payment FROM app.payments
+     WHERE order_id = p_order_id AND status = 'captured' ORDER BY payment_id LIMIT 1;
+    IF v_order.total > 0 THEN
+        INSERT INTO app.refunds (order_id, payment_id, amount, reason, processed_by)
+        VALUES (p_order_id, v_payment.payment_id, v_order.total, p_reason, p_processed_by);
+        UPDATE app.payments SET status = 'refunded' WHERE payment_id = v_payment.payment_id;
+    END IF;
+
+    UPDATE app.orders SET status = 'refunded' WHERE order_id = p_order_id;
+    UPDATE app.tickets t SET status = 'cancelled'
+      FROM app.order_items oi WHERE oi.order_item_id = t.order_item_id AND oi.order_id = p_order_id;
+
+    FOR li IN SELECT ticket_type_id, quantity FROM app.order_items WHERE order_id = p_order_id ORDER BY ticket_type_id LOOP
+        UPDATE app.ticket_types SET quantity_sold = quantity_sold - li.quantity WHERE ticket_type_id = li.ticket_type_id;
+        PERFORM app.offer_waitlist(li.ticket_type_id);
+    END LOOP;
+
+    RETURN v_order.total;
+END $$;
+COMMENT ON FUNCTION app.refund_order IS 'Full refund before the event: money back, tickets cancelled, seats returned and offered to the waitlist';
