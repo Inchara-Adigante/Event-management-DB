@@ -261,3 +261,57 @@ BEGIN
     RETURN v_order.total;
 END $$;
 COMMENT ON FUNCTION app.refund_order IS 'Full refund before the event: money back, tickets cancelled, seats returned and offered to the waitlist';
+
+-- ---------------------------------------------------------------------------
+-- check_in_ticket: the door scanner. Every scan is logged; a ticket can only be used once,
+-- even if two gates scan the same code at the same moment.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION app.check_in_ticket(p_code uuid, p_event_id bigint, p_gate text, p_scanned_by bigint DEFAULT NULL)
+RETURNS text LANGUAGE plpgsql AS $$
+DECLARE
+    v_ticket app.tickets%ROWTYPE;
+    v_starts timestamptz;
+    v_result text;
+BEGIN
+    SELECT * INTO v_ticket FROM app.tickets WHERE code = p_code FOR UPDATE;
+    IF NOT FOUND THEN
+        v_result := 'not_found';
+    ELSIF v_ticket.event_id <> p_event_id THEN
+        v_result := 'wrong_event';
+    ELSIF v_ticket.status = 'cancelled' THEN
+        v_result := 'cancelled';
+    ELSIF v_ticket.status = 'checked_in' THEN
+        v_result := 'already_checked_in';
+    ELSE
+        SELECT starts_at INTO v_starts FROM app.events WHERE event_id = p_event_id;
+        IF now() < v_starts - interval '2 hours' THEN
+            v_result := 'too_early';
+        ELSE
+            INSERT INTO app.check_ins (ticket_id, event_id, gate, scanned_by)
+            VALUES (v_ticket.ticket_id, v_ticket.event_id, p_gate, p_scanned_by);
+            UPDATE app.tickets SET status = 'checked_in' WHERE ticket_id = v_ticket.ticket_id;
+            v_result := 'admitted';
+        END IF;
+    END IF;
+
+    INSERT INTO app.scan_attempts (code, gate, result) VALUES (p_code, p_gate, v_result);
+    RETURN v_result;
+END $$;
+COMMENT ON FUNCTION app.check_in_ticket IS 'Door scan: returns admitted / already_checked_in / cancelled / not_found / wrong_event / too_early';
+
+-- Nightly housekeeping: close events that have ended. A procedure so it can commit in batches.
+CREATE PROCEDURE app.complete_finished_events(p_batch integer DEFAULT 500)
+LANGUAGE plpgsql AS $$
+DECLARE
+    n integer;
+BEGIN
+    LOOP
+        UPDATE app.events SET status = 'completed'
+         WHERE event_id IN (SELECT event_id FROM app.events
+                             WHERE status = 'published' AND ends_at < now() LIMIT p_batch);
+        GET DIAGNOSTICS n = ROW_COUNT;
+        COMMIT;
+        EXIT WHEN n < p_batch;
+    END LOOP;
+END $$;
+COMMENT ON PROCEDURE app.complete_finished_events IS 'Nightly job: marks published events that have ended as completed, committing in batches';
