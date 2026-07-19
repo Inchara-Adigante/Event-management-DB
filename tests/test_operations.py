@@ -69,3 +69,30 @@ def test_only_attendees_can_rate_an_event(con, f):
         con.execute("INSERT INTO app.feedback (event_id, user_id, rating) VALUES (%s, %s, 1)", (ev["id"], no_show))
     with pytest.raises(errors.UniqueViolation):
         con.execute("INSERT INTO app.feedback (event_id, user_id, rating) VALUES (%s, %s, 4)", (ev["id"], attendee))
+
+
+def test_audit_log_keeps_only_changed_columns(con, f):
+    ev = f.event()
+    old_title = one(con, "SELECT title FROM app.events WHERE event_id = %s", (ev["id"],))
+    with con.transaction():
+        con.execute("SET LOCAL app.user_id = '7'")
+        con.execute("UPDATE app.events SET title = 'Renamed', description = description WHERE event_id = %s", (ev["id"],))
+    row = con.execute("""SELECT old_values, new_values, app_user FROM audit.change_log
+                         WHERE table_name = 'events' AND operation = 'UPDATE'""").fetchone()
+    assert row == ({"title": old_title}, {"title": "Renamed"}, "7")
+
+
+def test_inventory_changes_are_audited(con, f):
+    tt = f.ticket_type(f.event())
+    f.buy(f.user(), tt, qty=2)
+    change = con.execute("""SELECT old_values, new_values FROM audit.change_log
+                            WHERE table_name = 'ticket_types' AND operation = 'UPDATE'""").fetchone()
+    assert change == ({"quantity_sold": 0}, {"quantity_sold": 2})
+
+
+def test_housekeeping_completes_finished_events(con, f):
+    ev = f.event()
+    con.execute("UPDATE app.events SET starts_at = now() - interval '2 days', ends_at = now() - interval '1 day' WHERE event_id = %s",
+                (ev["id"],))
+    con.execute("CALL app.complete_finished_events()")
+    assert one(con, "SELECT status FROM app.events WHERE event_id = %s", (ev["id"],)) == "completed"
