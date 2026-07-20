@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: event_mgmt
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-retries 30
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/event_mgmt
+      DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5432/event_mgmt_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Apply migrations
+        run: python scripts/migrate.py --reset
+      - name: Re-running migrations is a no-op
+        run: python scripts/migrate.py | grep -q "up to date"
+      - name: Tests (constraints, checkout, concurrency, refunds, RLS, reports, seed)
+        run: python -m pytest -v
