@@ -622,6 +622,7 @@ def load(url: str, g: Generator) -> dict:
                     con.execute(f"ALTER TABLE app.{table} ALTER COLUMN {ident} SET GENERATED ALWAYS")
                     con.execute(f"SELECT setval(pg_get_serial_sequence('app.{table}', '{ident}'), "
                                 f"(SELECT coalesce(max({ident}), 0) + 1 FROM app.{table}), false)")
+                con.execute(f"ANALYZE app.{table}")              # later triggers need real statistics
                 counts[table] = len(rows)
                 print(f"  {table:<18} {len(rows):>9,} rows  {time.time() - t0:5.1f}s")
             con.execute("TRUNCATE audit.change_log")            # seed history isn't real user activity
