@@ -329,7 +329,8 @@ class Generator:
                                      status, start, end, cap, pub, created, max(created, pub or created)))
             ev = dict(id=eid, kind=kind, city=city, start=start, end=end, cap=cap, vid=vid, status=status,
                       published=published, cancel_at=cancel_at, topic=topic, local_start=local_start, days=days, org=org,
-                      quality=self.r.uniform(3.1, 4.8), popularity=min(1.0, self.r.betavariate(4, 1.8) * 1.15))
+                      quality=self.r.uniform(3.1, 4.8), popularity=min(1.0, self.r.betavariate(4, 1.8) * 1.15),
+                      hot=status == "published" and start > self.now + timedelta(days=7) and self.r.random() < .12)
             self.sessions_for(ev)
             if status != "draft":
                 self.tickets_for(ev)
@@ -419,9 +420,13 @@ class Generator:
         user_tickets = []                                        # (order_id, user, [ticket ids])
         for tier in tiers:
             target = int(tier["qty"] * min(1.0, ev["popularity"] * self.r.uniform(.8, 1.1)))
+            # Hot events sell out before today; their waitlists fill up.
+            sell_end = min(tier["end"], self.now - timedelta(hours=12)) if ev["hot"] else tier["end"]
+            if ev["hot"] and sell_end > tier["start"]:
+                target = tier["qty"]
             while tier["sold"] < target:
                 q = min(self.r.choices([1, 2, 3, 4, 6], [50, 30, 10, 7, 3])[0], tier["maxpo"], target - tier["sold"])
-                when = self.sale_time(tier["start"], tier["end"])
+                when = self.sale_time(tier["start"], sell_end)
                 if when > cutoff:
                     tier["sold"] += q                            # would sell later; not in the data yet
                     continue
