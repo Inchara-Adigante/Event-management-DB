@@ -84,14 +84,14 @@ COMMENTS = {5: ["Fantastic event, well organized.", "Best one yet, will come bac
 # kind -> (days, local start hour, duration hours, capacity range, tiers, sessions?)
 # tiers: (name, share of capacity, price range)
 PROFILES = {
-    "conference": dict(days=(1, 3), start=9, hours=8.5, cap=(300, 2500), sessions="conference",
+    "conference": dict(days=(1, 3), start=9, hours=8.5, cap=(200, 1500), sessions="conference",
                        tiers=[("Early Bird", .15, (149, 399)), ("General Admission", .62, (249, 799)),
                               ("VIP", .08, (899, 1499)), ("Student", .10, (49, 149))]),
     "workshop":   dict(days=(1, 1), start=9, hours=7, cap=(25, 80), sessions="workshop",
                        tiers=[("General Admission", .9, (49, 249))]),
-    "concert":    dict(days=(1, 1), start=19, hours=3.5, cap=(400, 5000), sessions="show",
+    "concert":    dict(days=(1, 1), start=19, hours=3.5, cap=(300, 3000), sessions="show",
                        tiers=[("General Admission", .82, (35, 120)), ("VIP", .1, (150, 350))]),
-    "festival":   dict(days=(2, 3), start=12, hours=10, cap=(2000, 8000), sessions="festival",
+    "festival":   dict(days=(2, 3), start=12, hours=10, cap=(1500, 5000), sessions="festival",
                        tiers=[("Early Bird", .2, (79, 149)), ("General Admission", .65, (129, 249)), ("VIP", .08, (299, 599))]),
     "jazz":       dict(days=(1, 1), start=20, hours=2.5, cap=(100, 300), sessions="show",
                        tiers=[("General Admission", .95, (25, 60))]),
@@ -148,7 +148,7 @@ class Generator:
                 self.leaves.append((cid, leaf, top))
 
     def users(self):
-        n = int(60000 * self.scale)
+        n = int(150000 * self.scale)
         self.users_by_city = defaultdict(list)
         domains = ["gmail.com", "outlook.com", "yahoo.com", "icloud.com", "proton.me", "northeastern.edu"]
         for i in range(n):
@@ -161,7 +161,7 @@ class Generator:
             self.t["users"].append((uid, email, f"{first} {last}", phone, city, created, self.r.random() > .01))
             self.users_by_city[city].append(uid)
         # A few heavy attendees and many occasional ones: skewed sampling weights.
-        self.user_cum = list(accumulate(1 / (k + 1) ** 0.55 for k in range(n)))
+        self.user_cum = list(accumulate(1 / (k + 1) ** 0.35 for k in range(n)))
         self.user_order = list(range(1, n + 1))
         self.r.shuffle(self.user_order)
         self.user_by_id = {row[0]: row for row in self.t["users"]}
@@ -272,7 +272,7 @@ class Generator:
         return None
 
     def events(self):
-        n = int(1200 * self.scale)
+        n = int(1000 * self.scale)
         span_start, span_end = self.now - timedelta(days=420), self.now + timedelta(days=150)
         venues_by_city = defaultdict(list)
         for vid, info in self.venue_info.items():
@@ -309,11 +309,11 @@ class Generator:
             created = min(created, self.now - timedelta(days=1))
             published = created + timedelta(days=self.r.randint(1, 10))
             if start > self.now:
-                status = self.r.choices(["published", "draft", "cancelled"], [90, 7, 3])[0]
+                status = self.r.choices(["published", "draft", "cancelled"], [91, 7, 2])[0]
             elif end > self.now:
                 status = "published"                          # happening right now
             else:
-                status = self.r.choices(["completed", "cancelled"], [97, 3])[0]
+                status = self.r.choices(["completed", "cancelled"], [98.5, 1.5])[0]
             if published > self.now:
                 status = "draft"
             cancel_at = None
@@ -327,9 +327,11 @@ class Generator:
             self.event_org[eid] = org
             self.t["events"].append((eid, org, vid, cid, title, f"{slugify(title)}-{eid}", self.describe(kind, topic, city),
                                      status, start, end, cap, pub, created, max(created, pub or created)))
+            quality = self.r.uniform(3.1, 4.8)
             ev = dict(id=eid, kind=kind, city=city, start=start, end=end, cap=cap, vid=vid, status=status,
                       published=published, cancel_at=cancel_at, topic=topic, local_start=local_start, days=days, org=org,
-                      quality=self.r.uniform(3.1, 4.8), popularity=min(1.0, self.r.betavariate(4, 1.8) * 1.15),
+                      quality=quality,
+                      popularity=max(.15, min(1.0, self.r.betavariate(4, 2.2) + (quality - 3.95) * .3)),
                       hot=status == "published" and start > self.now + timedelta(days=7) and self.r.random() < .12)
             self.sessions_for(ev)
             if status != "draft":
@@ -419,7 +421,8 @@ class Generator:
         cutoff = min(self.now, ev["cancel_at"] or ev["start"])
         user_tickets = []                                        # (order_id, user, [ticket ids])
         for tier in tiers:
-            target = int(tier["qty"] * min(1.0, ev["popularity"] * self.r.uniform(.8, 1.1)))
+            demand = {"Early Bird": 1.4, "Student": 1.15, "VIP": .8}.get(tier["name"], 1.0)
+            target = int(tier["qty"] * min(1.0, ev["popularity"] * demand * self.r.uniform(.85, 1.1)))
             # Hot events sell out before today; their waitlists fill up.
             sell_end = min(tier["end"], self.now - timedelta(hours=12)) if ev["hot"] else tier["end"]
             if ev["hot"] and sell_end > tier["start"]:
@@ -524,7 +527,8 @@ class Generator:
         tz = ev["local_start"].tzinfo
         gates = ["Gate A", "Gate B", "Gate C"] if ev["cap"] > 500 else ["Main Entrance"]
         staff = self.org_members[ev["org"]]
-        show = self.r.uniform(.78, .95)
+        free = all(t["price"] == 0 for t in ev["tiers"])
+        show = self.r.uniform(.55, .72) if free else self.r.uniform(.84, .95)
         attended_users = set()
         for oid, uid, tids, _, _ in user_tickets:
             for k, tid in enumerate(tids):
