@@ -113,3 +113,21 @@ def test_editing_an_applied_migration_is_detected(db_url, tmp_path, monkeypatch)
     monkeypatch.setattr(migrate, "MIGRATIONS", fake)
     with pytest.raises(SystemExit, match="changed after it was applied"):
         migrate.migrate(db_url)
+
+
+def test_seed_generator_loads_with_every_rule_enforced(con, db_url):
+    out = subprocess.run([sys.executable, str(ROOT / "db" / "seed" / "generate.py"), "--scale", "0.03"],
+                         env={"DATABASE_URL": db_url, "PATH": ""}, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    # Inventory counters equal the tickets that are actually live.
+    assert one(con, """SELECT count(*) FROM app.ticket_types tt
+                       WHERE quantity_sold <> (SELECT count(*) FROM app.tickets t JOIN app.order_items oi USING (order_item_id)
+                                               WHERE oi.ticket_type_id = tt.ticket_type_id AND t.status <> 'cancelled')""") == 0
+    # Every paid order has a captured payment of the same amount.
+    assert one(con, """SELECT count(*) FROM app.orders o JOIN app.payments p USING (order_id)
+                       WHERE o.status = 'paid' AND (p.status <> 'captured' OR p.amount <> o.total)""") == 0
+    # Promo usage counters match the orders that used them.
+    assert one(con, """SELECT count(*) FROM app.promo_codes pc
+                       WHERE times_used <> (SELECT count(*) FROM app.orders o WHERE o.promo_id = pc.promo_id)""") == 0
+    assert one(con, "SELECT count(*) FROM app.events WHERE status = 'completed'") > 0
+    assert one(con, "SELECT count(*) FROM report.daily_revenue") > 0
