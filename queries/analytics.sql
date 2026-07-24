@@ -88,13 +88,17 @@ SELECT CASE WHEN events >= 10 THEN '10+' ELSE events::text END AS events_attende
 
 -- name: arrival_curve
 -- When do people arrive? Check-ins in 15-minute buckets relative to the start time (big events).
-SELECT (floor(extract(epoch FROM c.checked_in_at - e.starts_at) / 900) * 15)::int AS minutes_from_start,
-       count(*) AS check_ins,
-       round(100.0 * count(*) / sum(count(*)) OVER (), 1) AS pct,
-       round(100.0 * sum(count(*)) OVER (ORDER BY 1) / sum(count(*)) OVER (), 1) AS cumulative_pct
-  FROM app.check_ins c JOIN app.events e USING (event_id)
- WHERE e.capacity >= 1000
- GROUP BY 1 ORDER BY 1;
+WITH b AS (
+    SELECT (floor(extract(epoch FROM c.checked_in_at - e.starts_at) / 900) * 15)::int AS minutes_from_start,
+           count(*) AS check_ins
+      FROM app.check_ins c JOIN app.events e USING (event_id)
+     WHERE e.capacity >= 1000
+     GROUP BY 1
+)
+SELECT minutes_from_start, check_ins,
+       round(100.0 * check_ins / sum(check_ins) OVER (), 1) AS pct,
+       round(100.0 * sum(check_ins) OVER (ORDER BY minutes_from_start) / sum(check_ins) OVER (), 1) AS cumulative_pct
+  FROM b ORDER BY minutes_from_start;
 
 -- name: busiest_gates
 -- Which gates need more staff? Peak 5-minute scan count per gate (top 10).
