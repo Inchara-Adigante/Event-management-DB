@@ -54,6 +54,7 @@ def index_experiments():
             email=con.execute("SELECT attendee_email FROM app.tickets WHERE ticket_id = 123456").fetchone()[0],
             event=con.execute("SELECT event_id FROM app.orders GROUP BY 1 ORDER BY count(*) DESC LIMIT 1").fetchone()[0],
             item=con.execute("SELECT order_item_id FROM app.order_items WHERE quantity = 4 LIMIT 1").fetchone()[0],
+            typo=con.execute("SELECT overlay(full_name placing 'xq' from 3 for 1) FROM app.users WHERE user_id = 4242").fetchone()[0],
             day=con.execute("SELECT attempted_at::date FROM app.scan_attempts ORDER BY attempted_at OFFSET 300000 LIMIT 1").fetchone()[0],
         )
         cases = [
@@ -70,8 +71,9 @@ def index_experiments():
             ("Scan log for one day (BRIN)", "scan_attempts_time",
              "SELECT result, count(*) FROM app.scan_attempts WHERE attempted_at >= %(day)s::date "
              "AND attempted_at < %(day)s::date + 1 GROUP BY result"),
-            ("Typo-tolerant title search (trigram)", "events_title_trgm",
-             "SELECT title FROM app.events WHERE title %% 'Machin Lerning Sumit' ORDER BY similarity(title, 'Machin Lerning Sumit') DESC LIMIT 5"),
+            ("Customer lookup with a misspelled name (trigram)", "users_name_trgm",
+             "SELECT user_id, full_name, email FROM app.users WHERE full_name %% %(typo)s "
+             "ORDER BY similarity(full_name, %(typo)s) DESC LIMIT 5"),
         ]
         results = []
         for label, index, sql in cases:
