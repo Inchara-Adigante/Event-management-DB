@@ -20,6 +20,8 @@ CREATE INDEX events_upcoming        ON app.events (starts_at) WHERE status = 'pu
 -- Search box: full-text on title + description, and typo-tolerant title matching.
 CREATE INDEX events_search          ON app.events USING gin (search);
 CREATE INDEX events_title_trgm      ON app.events USING gin (title gin_trgm_ops);
+-- Support desk: find a customer even when the name is misspelled ("Jon Smiht").
+CREATE INDEX users_name_trgm        ON app.users USING gin (full_name gin_trgm_ops);
 
 -- Organizer dashboards: an event's orders by status; a buyer's order history, newest first.
 CREATE INDEX orders_event_status    ON app.orders (event_id, status);
@@ -34,7 +36,9 @@ CREATE INDEX tickets_attendee_email ON app.tickets (attendee_email);
 CREATE INDEX check_ins_event_time   ON app.check_ins (event_id, checked_in_at);
 
 -- Scan log is append-only and time-ordered: BRIN is tiny and good enough for time ranges.
-CREATE INDEX scan_attempts_time     ON app.scan_attempts USING brin (attempted_at);
+-- autosummarize: new block ranges are summarized as they fill up (otherwise only VACUUM does it,
+-- and unsummarized ranges are always read).
+CREATE INDEX scan_attempts_time     ON app.scan_attempts USING brin (attempted_at) WITH (autosummarize = on);
 
 -- Waitlist queue: next person in line for a ticket type.
 CREATE INDEX waitlist_queue         ON app.waitlist (ticket_type_id, joined_at) WHERE status = 'waiting';

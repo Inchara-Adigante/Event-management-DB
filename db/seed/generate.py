@@ -577,6 +577,8 @@ class Generator:
         self.event_org = {}
         self.categories(); self.users(); self.orgs(); self.venues(); self.speakers()
         self.events()
+        # Door scanners append to the log as people arrive: store it in time order, like production.
+        self.t["scan_attempts"].sort(key=lambda r: r[3])
         self.t["orders"] = list(map(tuple, self.order_rows.values()))
         self.t["payments"] = list(map(tuple, self.payment_rows.values()))
         self.t["tickets"] = [(tid, item, eid, code, name, email, self.ticket_status[tid], issued)
@@ -637,7 +639,7 @@ def load(url: str, g: Generator) -> dict:
             con.execute("TRUNCATE audit.change_log")            # seed history isn't real user activity
         con.autocommit = True
         con.execute("SELECT report.refresh()")
-        con.execute("ANALYZE")
+        con.execute("VACUUM ANALYZE")                         # also summarizes BRIN ranges after the bulk load
     return counts
 
 
