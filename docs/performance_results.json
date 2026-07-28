@@ -1,0 +1,169 @@
+{
+  "indexes": {
+    "cases": [
+      {
+        "query": "Buyer's order history (newest 20)",
+        "index": "orders_user_recent",
+        "index_size": "9328 kB",
+        "sql": "SELECT order_id, total, created_at FROM app.orders WHERE user_id = '3164' ORDER BY created_at DESC LIMIT 20",
+        "without": {
+          "ms": 11.181,
+          "plan": [
+            "Seq Scan on orders"
+          ],
+          "buffers": 3196
+        },
+        "with_index": {
+          "ms": 0.036,
+          "plan": [
+            "Bitmap Heap Scan on orders",
+            "Bitmap Index Scan using orders_user_recent"
+          ],
+          "buffers": 28
+        },
+        "speedup": 310.6
+      },
+      {
+        "query": "Support desk: find tickets by email",
+        "index": "tickets_attendee_email",
+        "index_size": "28 MB",
+        "sql": "SELECT ticket_id, code, status FROM app.tickets WHERE attendee_email = 'guest123456@example.com'",
+        "without": {
+          "ms": 97.189,
+          "plan": [
+            "Seq Scan on tickets"
+          ],
+          "buffers": 6656
+        },
+        "with_index": {
+          "ms": 0.022,
+          "plan": [
+            "Index Scan on tickets using tickets_attendee_email"
+          ],
+          "buffers": 4
+        },
+        "speedup": 4417.7
+      },
+      {
+        "query": "Organizer dashboard: paid orders of an event",
+        "index": "orders_event_status",
+        "index_size": "2112 kB",
+        "sql": "SELECT count(*), sum(total) FROM app.orders WHERE event_id = '676' AND status = 'paid'",
+        "without": {
+          "ms": 9.338,
+          "plan": [
+            "Seq Scan on orders"
+          ],
+          "buffers": 3120
+        },
+        "with_index": {
+          "ms": 0.43,
+          "plan": [
+            "Index Scan on orders using orders_event_status"
+          ],
+          "buffers": 31
+        },
+        "speedup": 21.7
+      },
+      {
+        "query": "Tickets of an order line (foreign key join)",
+        "index": "tickets_order_item",
+        "index_size": "7600 kB",
+        "sql": "SELECT ticket_id, attendee_name FROM app.tickets WHERE order_item_id = '9'",
+        "without": {
+          "ms": 12.536,
+          "plan": [
+            "Seq Scan on tickets"
+          ],
+          "buffers": 6656
+        },
+        "with_index": {
+          "ms": 0.007,
+          "plan": [
+            "Index Scan on tickets using tickets_order_item"
+          ],
+          "buffers": 4
+        },
+        "speedup": 1790.9
+      },
+      {
+        "query": "Arrival curve of one event",
+        "index": "check_ins_event_time",
+        "index_size": "12 MB",
+        "sql": "SELECT date_trunc('minute', checked_in_at), count(*) FROM app.check_ins WHERE event_id = '676' GROUP BY 1",
+        "without": {
+          "ms": 11.547,
+          "plan": [
+            "Seq Scan on check_ins"
+          ],
+          "buffers": 2880
+        },
+        "with_index": {
+          "ms": 0.931,
+          "plan": [
+            "Index Only Scan on check_ins using check_ins_event_time"
+          ],
+          "buffers": 21
+        },
+        "speedup": 12.4
+      },
+      {
+        "query": "Scan log for one day (BRIN)",
+        "index": "scan_attempts_time",
+        "index_size": "24 kB",
+        "sql": "SELECT result, count(*) FROM app.scan_attempts WHERE attempted_at >= '2026-07-17'::date AND attempted_at < '2026-07-17'::date + 1 GROUP BY result",
+        "without": {
+          "ms": 14.12,
+          "plan": [
+            "Seq Scan on scan_attempts"
+          ],
+          "buffers": 2982
+        },
+        "with_index": {
+          "ms": 1.239,
+          "plan": [
+            "Bitmap Heap Scan on scan_attempts",
+            "Bitmap Index Scan using scan_attempts_time"
+          ],
+          "buffers": 130
+        },
+        "speedup": 11.4
+      },
+      {
+        "query": "Customer lookup with a misspelled name (trigram)",
+        "index": "users_name_trgm",
+        "index_size": "10 MB",
+        "sql": "SELECT user_id, full_name, email FROM app.users WHERE full_name % 'Jexqf Torres' ORDER BY similarity(full_name, 'Jexqf Torres') DESC LIMIT 5",
+        "without": {
+          "ms": 269.458,
+          "plan": [
+            "Seq Scan on users"
+          ],
+          "buffers": 2200
+        },
+        "with_index": {
+          "ms": 4.318,
+          "plan": [
+            "Bitmap Heap Scan on users",
+            "Bitmap Index Scan using users_name_trgm"
+          ],
+          "buffers": 501
+        },
+        "speedup": 62.4
+      }
+    ],
+    "brin_vs_btree": {
+      "brin": "24 kB",
+      "btree": "6768 kB"
+    },
+    "tickets": 425486
+  },
+  "contention": {
+    "threads": 16,
+    "purchases_per_run": 2400,
+    "hot_row_per_sec": 644,
+    "spread_per_sec": 2123,
+    "oversold_ticket_types": 0,
+    "counters_match_tickets": true
+  }
+}
