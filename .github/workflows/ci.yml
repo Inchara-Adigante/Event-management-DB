@@ -33,3 +33,7 @@ jobs:
         run: python scripts/migrate.py | grep -q "up to date"
       - name: Tests (constraints, checkout, concurrency, refunds, RLS, reports, seed)
         run: python -m pytest -v
+      - name: Load a small seed and run every analytics query
+        run: |
+          python db/seed/generate.py --scale 0.1
+          python scripts/run_queries.py
