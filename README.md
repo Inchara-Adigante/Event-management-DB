@@ -60,7 +60,7 @@ Full diagram with columns: [docs/erd.md](docs/erd.md) · every column and constr
 | Organizers only ever see their own events, orders and tickets | Row-level security |
 | Every change to money and inventory is recorded | Generic audit trigger (changed columns only) |
 
-Details and trade-offs: [docs/design.md](docs/design.md)
+Details and trade-offs: [docs/design.md](docs/design.md) · the same patterns explained simply: [How ticket sites stop two people booking the same seat](https://github.com/Inchara-Adigante/Lets-Learn/blob/main/system-design/how-seat-booking-works.md)
 
 ## Using it
 
@@ -165,10 +165,14 @@ Event-management-DB/
 ├── tests/                              47 tests: constraints, checkout, concurrency, refunds,
 │                                       waitlist, door, audit, RLS, reports, migrations, seed
 ├── docs/                               ERD, data dictionary, design, performance, analytics results
-├── docker-compose.yml · Makefile · .github/workflows/ci.yml
+├── docker-compose.yml · Makefile · .github/workflows/ci.yml · CONTRIBUTING.md
 ```
 
 ## Tech
 
 PostgreSQL 16 (PL/pgSQL, `citext`, `btree_gist`, `pg_trgm`, `pgcrypto`), Python 3 with psycopg 3, pytest, Faker,
 GitHub Actions.
+
+## Contributing
+
+Ideas and good first tasks are in [CONTRIBUTING.md](CONTRIBUTING.md).
